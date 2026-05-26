@@ -55,25 +55,23 @@ export default function App() {
       return;
     }
 
-    // Check if username already exists
+    
     const userExists = usersDatabase.some(u => u.username === trimmedUser);
     if (userExists) {
       Alert.alert('Error', 'Username is already taken!');
       return;
     }
 
-    // Add new user credentials to our database state
+    
     setUsersDatabase([...usersDatabase, { username: trimmedUser, password: passwordInput }]);
     Alert.alert('Success!', 'Account created successfully! You can now log in.', [
       { text: 'OK', onPress: () => toggleAuthMode('login') }
     ]);
   };
 
-  // 2. Login Handler
   const handleLogin = (): void => {
     const trimmedUser = usernameInput.trim().toLowerCase();
 
-    // Search database for matching credentials
     const validUser = usersDatabase.find(
       u => u.username === trimmedUser && u.password === passwordInput
     );
@@ -81,7 +79,6 @@ export default function App() {
     if (validUser) {
       setCurrentUser(validUser.username);
       setIsLoggedIn(true);
-      // Reset inputs
       setUsernameInput('');
       setPasswordInput('');
     } else {
@@ -195,7 +192,6 @@ export default function App() {
             </View>
           </View>
         ) : (
-          /* ================= MAIN APPLICATION WORKSPACE ================= */
           <View style={styles.mainAppWrapper}>
             <View style={styles.header}>
               <View>
