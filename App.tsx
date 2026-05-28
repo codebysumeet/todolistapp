@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   StyleSheet,
   Text,
@@ -10,8 +10,10 @@ import {
   Platform,
   ListRenderItem,
   Alert,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Interfaces for structured data
 interface Task {
@@ -25,70 +27,130 @@ interface UserCredentials {
   password: string;
 }
 
+// Storage Keys
+const USER_SESSION_KEY = '@user_session';
+const USERS_DB_KEY = '@users_database';
+
 export default function App() {
-  // Auth Screen State: 'login' or 'signup'
+  // Auth Screen States
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
   const [isLoggedIn, setIsLoggedIn] = useState<boolean>(false);
   const [currentUser, setCurrentUser] = useState<string>('');
-  
+  const [isLoading, setIsLoading] = useState<boolean>(true); // Loading state while checking storage
+
   // Credentials Inputs
   const [usernameInput, setUsernameInput] = useState<string>('');
   const [passwordInput, setPasswordInput] = useState<string>('');
 
-  // Local Registered Users Database (Starts with one default admin)
+  // Local Registered Users Database
   const [usersDatabase, setUsersDatabase] = useState<UserCredentials[]>([
-    { username: 'admin', password: 'password' }
+    { username: 'admin', password: 'password' },
   ]);
 
   // To-do States
   const [task, setTask] = useState<string>('');
   const [taskList, setTaskList] = useState<Task[]>([]);
 
+  /* ================= PERSISTENCE LOGIC (EFFECTS) ================= */
+
+  // Load user session and user database on startup
+  useEffect(() => {
+    const initializeApp = async () => {
+      try {
+        // 1. Load the registered users database
+        const storedDb = await AsyncStorage.getItem(USERS_DB_KEY);
+        if (storedDb) {
+          setUsersDatabase(JSON.parse(storedDb));
+        }
+
+        // 2. Check if a user session is already saved
+        const savedUser = await AsyncStorage.getItem(USER_SESSION_KEY);
+        if (savedUser) {
+          setCurrentUser(savedUser);
+          setIsLoggedIn(true);
+        }
+      } catch (error) {
+        console.error('Failed to load local data from storage:', error);
+      } finally {
+        setIsLoading(false); // Stop showing the loading spinner
+      }
+    };
+
+    initializeApp();
+  }, []);
+
   /* ================= AUTHENTICATION LOGIC ================= */
-  
-  // 1. Sign Up Handler
-  const handleSignUp = (): void => {
+
+  // Sign Up Handler
+  const handleSignUp = async (): Promise<void> => {
     const trimmedUser = usernameInput.trim().toLowerCase();
-    
+
     if (trimmedUser === '' || passwordInput === '') {
       Alert.alert('Error', 'Please fill out all fields.');
       return;
     }
 
-    
     const userExists = usersDatabase.some(u => u.username === trimmedUser);
     if (userExists) {
       Alert.alert('Error', 'Username is already taken!');
       return;
     }
 
-    
-    setUsersDatabase([...usersDatabase, { username: trimmedUser, password: passwordInput }]);
-    Alert.alert('Success!', 'Account created successfully! You can now log in.', [
-      { text: 'OK', onPress: () => toggleAuthMode('login') }
-    ]);
+    const updatedDb = [
+      ...usersDatabase,
+      { username: trimmedUser, password: passwordInput },
+    ];
+
+    try {
+      // Save updated database permanently to storage
+      await AsyncStorage.setItem(USERS_DB_KEY, JSON.stringify(updatedDb));
+      setUsersDatabase(updatedDb);
+
+      Alert.alert(
+        'Success!',
+        'Account created successfully! You can now log in.',
+        [{ text: 'OK', onPress: () => toggleAuthMode('login') }],
+      );
+    } catch (e) {
+      Alert.alert('Error', 'Failed to save account to device hardware.');
+    }
   };
 
-  const handleLogin = (): void => {
+  // Login Handler
+  const handleLogin = async (): Promise<void> => {
     const trimmedUser = usernameInput.trim().toLowerCase();
 
     const validUser = usersDatabase.find(
-      u => u.username === trimmedUser && u.password === passwordInput
+      u => u.username === trimmedUser && u.password === passwordInput,
     );
 
     if (validUser) {
-      setCurrentUser(validUser.username);
-      setIsLoggedIn(true);
-      setUsernameInput('');
-      setPasswordInput('');
+      try {
+        // Save user token/name to device memory
+        await AsyncStorage.setItem(USER_SESSION_KEY, validUser.username);
+
+        setCurrentUser(validUser.username);
+        setIsLoggedIn(true);
+        setUsernameInput('');
+        setPasswordInput('');
+      } catch (e) {
+        Alert.alert('Error', 'Could not create a persistent session.');
+      }
     } else {
       Alert.alert('Authentication Failed', 'Invalid username or password.');
     }
   };
 
-  const handleLogout = (): void => {
-    setIsLoggedIn(false);
-    setCurrentUser('');
+  // Logout Handler
+  const handleLogout = async (): Promise<void> => {
+    try {
+      // Clear saved credentials session from device storage
+      await AsyncStorage.removeItem(USER_SESSION_KEY);
+      setIsLoggedIn(false);
+      setCurrentUser('');
+    } catch (e) {
+      Alert.alert('Error', 'Failed to clear login session safely.');
+    }
   };
 
   const toggleAuthMode = (mode: 'login' | 'signup') => {
@@ -100,12 +162,19 @@ export default function App() {
   /* ================= TO-DO LOGIC ================= */
   const handleAddTask = (): void => {
     if (task.trim() === '') return;
-    setTaskList([...taskList, { id: Date.now().toString(), text: task, completed: false }]);
+    setTaskList([
+      ...taskList,
+      { id: Date.now().toString(), text: task, completed: false },
+    ]);
     setTask('');
   };
 
   const toggleTask = (id: string): void => {
-    setTaskList(taskList.map(item => item.id === id ? { ...item, completed: !item.completed } : item));
+    setTaskList(
+      taskList.map(item =>
+        item.id === id ? { ...item, completed: !item.completed } : item,
+      ),
+    );
   };
 
   const deleteTask = (id: string): void => {
@@ -114,24 +183,40 @@ export default function App() {
 
   const renderTodoItem: ListRenderItem<Task> = ({ item }) => (
     <View style={styles.taskContainer}>
-      <TouchableOpacity style={styles.taskTextContainer} onPress={() => toggleTask(item.id)}>
-        <View style={[styles.checkbox, item.completed && styles.checkboxChecked]}>
+      <TouchableOpacity
+        style={styles.taskTextContainer}
+        onPress={() => toggleTask(item.id)}
+      >
+        <View
+          style={[styles.checkbox, item.completed && styles.checkboxChecked]}
+        >
           {item.completed && <Text style={styles.checkboxCheckmark}>✓</Text>}
         </View>
         <Text style={[styles.taskText, item.completed && styles.completedText]}>
           {item.text}
         </Text>
       </TouchableOpacity>
-      <TouchableOpacity style={styles.deleteButton} onPress={() => deleteTask(item.id)}>
+      <TouchableOpacity
+        style={styles.deleteButton}
+        onPress={() => deleteTask(item.id)}
+      >
         <Text style={styles.deleteButtonText}>✕</Text>
       </TouchableOpacity>
     </View>
   );
 
+  // While processing local file system lookups, display a clean splash loader
+  if (isLoading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#6366F1" />
+      </View>
+    );
+  }
+
   return (
     <SafeAreaProvider>
       <SafeAreaView style={styles.container}>
-        
         {!isLoggedIn ? (
           /* ================= AUTHENTICATION OVERLAY ================= */
           <View style={styles.authContainer}>
@@ -140,8 +225,8 @@ export default function App() {
                 {authMode === 'login' ? 'Welcome Back' : 'Create Account'}
               </Text>
               <Text style={styles.authSubtitle}>
-                {authMode === 'login' 
-                  ? 'Sign in to manage your daily tasks' 
+                {authMode === 'login'
+                  ? 'Sign in to manage your daily tasks'
                   : 'Get started by creating your local profile'}
               </Text>
 
@@ -166,25 +251,42 @@ export default function App() {
 
               {authMode === 'login' ? (
                 <>
-                  <TouchableOpacity style={styles.primaryButton} onPress={handleLogin}>
+                  <TouchableOpacity
+                    style={styles.primaryButton}
+                    onPress={handleLogin}
+                  >
                     <Text style={styles.primaryButtonText}>Sign In</Text>
                   </TouchableOpacity>
-                  
-                  <TouchableOpacity style={styles.switchModeButton} onPress={() => toggleAuthMode('signup')}>
+
+                  <TouchableOpacity
+                    style={styles.switchModeButton}
+                    onPress={() => toggleAuthMode('signup')}
+                  >
                     <Text style={styles.switchModeText}>
-                      Account doesn't exist? <Text style={styles.highlightText}>Sign Up</Text>
+                      Account doesn't exist?{' '}
+                      <Text style={styles.highlightText}>Sign Up</Text>
                     </Text>
                   </TouchableOpacity>
                 </>
               ) : (
                 <>
-                  <TouchableOpacity style={[styles.primaryButton, { backgroundColor: '#10B981' }]} onPress={handleSignUp}>
+                  <TouchableOpacity
+                    style={[
+                      styles.primaryButton,
+                      { backgroundColor: '#10B981' },
+                    ]}
+                    onPress={handleSignUp}
+                  >
                     <Text style={styles.primaryButtonText}>Register</Text>
                   </TouchableOpacity>
 
-                  <TouchableOpacity style={styles.switchModeButton} onPress={() => toggleAuthMode('login')}>
+                  <TouchableOpacity
+                    style={styles.switchModeButton}
+                    onPress={() => toggleAuthMode('login')}
+                  >
                     <Text style={styles.switchModeText}>
-                      Already have an account? <Text style={styles.highlightText}>Log In</Text>
+                      Already have an account?{' '}
+                      <Text style={styles.highlightText}>Log In</Text>
                     </Text>
                   </TouchableOpacity>
                 </>
@@ -192,13 +294,17 @@ export default function App() {
             </View>
           </View>
         ) : (
+          /* ================= MAIN WORKING SURFACE ================= */
           <View style={styles.mainAppWrapper}>
             <View style={styles.header}>
               <View>
                 <Text style={styles.headerSubtitle}>Hello, {currentUser}</Text>
                 <Text style={styles.headerTitle}>Your Workspace</Text>
               </View>
-              <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
+              <TouchableOpacity
+                style={styles.logoutButton}
+                onPress={handleLogout}
+              >
                 <Text style={styles.logoutButtonText}>Logout</Text>
               </TouchableOpacity>
             </View>
@@ -207,13 +313,15 @@ export default function App() {
               {taskList.length === 0 ? (
                 <View style={styles.emptyState}>
                   <Text style={styles.emptyTextTitle}>Clear skies ahead!</Text>
-                  <Text style={styles.emptyTextSub}>Catch up on your plans by adding a task below.</Text>
+                  <Text style={styles.emptyTextSub}>
+                    Catch up on your plans by adding a task below.
+                  </Text>
                 </View>
               ) : (
                 <FlatList
                   data={taskList}
                   renderItem={renderTodoItem}
-                  keyExtractor={(item) => item.id}
+                  keyExtractor={item => item.id}
                   showsVerticalScrollIndicator={false}
                 />
               )}
@@ -230,13 +338,15 @@ export default function App() {
                 value={task}
                 onChangeText={setTask}
               />
-              <TouchableOpacity onPress={handleAddTask} style={styles.addButton}>
+              <TouchableOpacity
+                onPress={handleAddTask}
+                style={styles.addButton}
+              >
                 <Text style={styles.addButtonText}>+</Text>
               </TouchableOpacity>
             </KeyboardAvoidingView>
           </View>
         )}
-
       </SafeAreaView>
     </SafeAreaProvider>
   );
@@ -245,6 +355,12 @@ export default function App() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: '#0F172A',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
     backgroundColor: '#0F172A',
   },
   mainAppWrapper: {
